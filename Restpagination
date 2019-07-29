@@ -1,0 +1,130 @@
+//implementation 
+
+@GetMapping(params = { "page", "size" })
+public List<Foo> findPaginated(@RequestParam("page") int page, 
+  @RequestParam("size") int size, UriComponentsBuilder uriBuilder,
+  HttpServletResponse response) {
+    Page<Foo> resultPage = service.findPaginated(page, size);
+    if (page > resultPage.getTotalPages()) {
+        throw new MyResourceNotFoundException();
+    }
+    eventPublisher.publishEvent(new PaginatedResultsRetrievedEvent<Foo>(
+      Foo.class, uriBuilder, response, page, resultPage.getTotalPages(), size));
+ 
+    return resultPage.getContent();
+}
+
+
+//The UriComponentsBuilder passed from the controller contains only the base URL (the host, the port and the context path). 
+
+oid addLinkHeaderOnPagedResourceRetrieval(
+ UriComponentsBuilder uriBuilder, HttpServletResponse response,
+ Class clazz, int page, int totalPages, int size ){
+ 
+   String resourceName = clazz.getSimpleName().toString().toLowerCase();
+   uriBuilder.path( "/admin/" + resourceName );
+ 
+    // ...
+    
+}
+
+
+//Next, we’ll use a StringJoiner to concatenate each link. We’ll use the uriBuilder to generate the URIs. Let’s see how we’d proceed with the link to the next page:
+
+StringJoiner linkHeader = new StringJoiner(", ");
+if (hasNextPage(page, totalPages)){
+    String uriForNextPage = constructNextPageUri(uriBuilder, page, size);
+    linkHeader.add(createLinkHeader(uriForNextPage, "next"));
+}
+
+//logic of the constructNextPageUri method:
+
+String constructNextPageUri(UriComponentsBuilder uriBuilder, int page, int size) {
+    return uriBuilder.replaceQueryParam(PAGE, page + 1)
+      .replaceQueryParam("size", size)
+      .build()
+      .encode()
+      .toUriString();
+}
+
+//Test Driving Pagination
+
+@Test
+public void whenResourcesAreRetrievedPaged_then200IsReceived(){
+    Response response = RestAssured.get(paths.getFooURL() + "?page=0&size=2");
+ 
+    assertThat(response.getStatusCode(), is(200));
+}
+@Test
+public void whenPageOfResourcesAreRetrievedOutOfBounds_then404IsReceived(){
+    String url = getFooURL() + "?page=" + randomNumeric(5) + "&size=2";
+    Response response = RestAssured.get.get(url);
+ 
+    assertThat(response.getStatusCode(), is(404));
+}
+@Test
+public void givenResourcesExist_whenFirstPageIsRetrieved_thenPageContainsResources(){
+   createResource();
+   Response response = RestAssured.get(paths.getFooURL() + "?page=0&size=2");
+ 
+   assertFalse(response.body().as(List.class).isEmpty());
+}
+
+//Test Driving Pagination Discoverability
+
+@Test
+public void whenFirstPageOfResourcesAreRetrieved_thenSecondPageIsNext(){
+   Response response = RestAssured.get(getFooURL()+"?page=0&size=2");
+ 
+   String uriToNextPage = extractURIByRel(response.getHeader("Link"), "next");
+   assertEquals(getFooURL()+"?page=1&size=2", uriToNextPage);
+}
+@Test
+public void whenFirstPageOfResourcesAreRetrieved_thenNoPreviousPage(){
+   Response response = RestAssured.get(getFooURL()+"?page=0&size=2");
+ 
+   String uriToPrevPage = extractURIByRel(response.getHeader("Link"), "prev");
+   assertNull(uriToPrevPage );
+}
+@Test
+public void whenSecondPageOfResourcesAreRetrieved_thenFirstPageIsPrevious(){
+   Response response = RestAssured.get(getFooURL()+"?page=1&size=2");
+ 
+   String uriToPrevPage = extractURIByRel(response.getHeader("Link"), "prev");
+   assertEquals(getFooURL()+"?page=0&size=2", uriToPrevPage);
+}
+@Test
+public void whenLastPageOfResourcesIsRetrieved_thenNoNextPageIsDiscoverable(){
+   Response first = RestAssured.get(getFooURL()+"?page=0&size=2");
+   String uriToLastPage = extractURIByRel(first.getHeader("Link"), "last");
+ 
+   Response response = RestAssured.get(uriToLastPage);
+ 
+   String uriToNextPage = extractURIByRel(response.getHeader("Link"), "next");
+   assertNull(uriToNextPage);
+}
+
+
+//Spring Data REST Pagination
+
+public interface SubjectRepository extends PagingAndSortingRepository<Subject, Long>{}
+
+"_links" : {
+  "self" : {
+    "href" : "http://localhost:8080/subjects{?page,size,sort}",
+    "templated" : true
+  }
+}
+
+//If we want to implement paging into our own custom repository API we need to pass an additional Pageable parameter and make sure that API returns a Page:
+
+@RestResource(path = "nameContains")
+public Page<Subject> findByNameContaining(@Param("name") String name, Pageable p);
+
+//Whenever we add a custom API a /search endpoint gets added to the generated links. So if we call http://localhost:8080/subjects/search we will see a pagination capable endpoint:
+
+"findByNameContaining" : {
+  "href" : "http://localhost:8080/subjects/search/nameContains{?name,page,size,sort}",
+  "templated" : true
+}
+
